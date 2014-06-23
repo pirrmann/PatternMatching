@@ -1,0 +1,152 @@
+﻿<#@ template debug="false" hostspecific="false" language="C#" #>
+<#@ assembly name="System.Core" #>
+<#@ import namespace="System.Linq" #>
+<#@ import namespace="System.Text" #>
+<#@ import namespace="System.Collections.Generic" #>
+<#@ output extension=".Tuples.cs" #>
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Linq.Expressions;
+using System.Reflection;
+
+namespace PatternMatching
+{
+    public static partial class PatternMatcherCases
+    {
+		private static Expression CombineAll(this IEnumerable<Expression> expressions)
+        {
+            Expression aggregateExpression =
+                expressions.Aggregate(
+                    (Expression)null,
+                    (a, e) => a == null ? e : Expression.AndAlso(a, e));
+
+            return aggregateExpression ?? Expression.Constant(true);
+        }
+<#
+	string[] argumentsPatterns = new[]
+    {
+		"T{0} testValue{0}",
+		"Expression<Func<T{0}, bool>> testExpression{0}",
+		"MatchCase any{0}"
+    };
+
+	for(int cardinality = 2; cardinality <= 3; cardinality++)
+	{
+#>
+        #region <#= cardinality #>-uple
+<#
+		string typeArguments = String.Join(", ", Enumerable.Range(1, cardinality).Select(n => string.Concat("T", n.ToString())));
+		string selectorArgument = string.Concat("Expression<Func<", typeArguments, ", TResult>> selector");
+
+		for(int caseNumber = 0; caseNumber < System.Math.Pow(3, cardinality); caseNumber++)
+		{
+			int[] argumentsPatternsCases = new int[cardinality];
+			int argumentFlags = caseNumber;
+			for(int argumentIndex = 0; argumentIndex < cardinality; argumentIndex++)
+            {
+				argumentsPatternsCases[cardinality - argumentIndex - 1] = argumentFlags % 3;
+				argumentFlags = argumentFlags / 3;
+            }
+#>	
+		public static PatternMatcher<Tuple<<#= typeArguments #>>, TResult> Case<<#= typeArguments #>, TResult>(
+			this PatternMatcher<Tuple<<#= typeArguments #>>, TResult> pattern,
+<#
+			for(int argumentIndex = 0; argumentIndex < cardinality; argumentIndex++)
+            {
+#>
+			<#= string.Format(argumentsPatterns[argumentsPatternsCases[argumentIndex]], argumentIndex + 1) #>,
+<#
+            }
+#>
+			<#= selectorArgument #>)
+		{
+			ParameterExpression testParam = Expression.Parameter(typeof(Tuple<<#= typeArguments #>>), "t");
+			MemberInfo[] members = GetTupleMembers<<#= typeArguments #>>();
+
+			List<Expression> testExpressions = new List<Expression>();
+<#
+			for(int argumentIndex = 0; argumentIndex < cardinality; argumentIndex++)
+            {
+				switch(argumentsPatternsCases[argumentIndex])
+                {
+					case 0:
+#>
+			testExpressions.Add(
+				Expression.Equal(
+					Expression.MakeMemberAccess(testParam, members[<#= argumentIndex #>]),
+					Expression.Constant(testValue<#= argumentIndex + 1 #>)));
+<#
+						break;
+
+					case 1:
+#>
+			testExpressions.Add(
+                Expression.Invoke(
+                    testExpression<#= argumentIndex + 1 #>,
+                    Expression.MakeMemberAccess(testParam, members[<#= argumentIndex #>])));
+<#
+						break;
+                }
+            }
+#>
+
+			Expression aggregateExpression = testExpressions.CombineAll();
+
+            var testExpression = Expression.Lambda<Func<Tuple<<#= typeArguments #>>, bool>>(
+                aggregateExpression,
+                testParam);
+
+            var selectorExpression = GetSelectorExpression<<#= typeArguments #>, TResult>(selector, members);
+
+            return new PatternMatcher<Tuple<<#= typeArguments #>>, TResult>(
+                pattern,
+                new MatchCase<Tuple<<#= typeArguments #>>, TResult>(
+                    testExpression,
+                    selectorExpression));
+		}
+<#
+		}
+#>
+
+		#region Factored methods
+
+		private static MemberInfo[] GetTupleMembers<<#= typeArguments #>>()
+		{
+			Type tupleType = typeof(Tuple<<#= typeArguments #>>);
+
+			MemberInfo[] members = new MemberInfo[<#= cardinality #>];
+
+<#
+			for(int argumentIndex = 0; argumentIndex < cardinality; argumentIndex++)
+            {
+#>
+            members[<#= argumentIndex #>] = tupleType.GetProperty("Item<#= argumentIndex + 1 #>");
+<#
+            }
+#>
+
+			return members;
+		}
+
+		private static Expression<Func<Tuple<<#= typeArguments #>>, TResult>> GetSelectorExpression<<#= typeArguments #>, TResult>(<#= selectorArgument #>, MemberInfo[] members)
+		{
+			ParameterExpression selectorParam = Expression.Parameter(typeof(Tuple<<#= typeArguments #>>), "t");
+            var selectorExpression = Expression.Lambda<Func<Tuple<<#= typeArguments #>>, TResult>>(
+                Expression.Invoke(
+                    selector,
+					<#= String.Join(",\r\n\t\t\t\t\t", Enumerable.Range(0, cardinality).Select(i => string.Format("Expression.MakeMemberAccess(selectorParam, members[{0}])", i))) #>),
+                selectorParam);
+
+			return selectorExpression;
+		}
+
+		#endregion
+
+		#endregion
+
+<#
+}
+#>
+    }
+}
